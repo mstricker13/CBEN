@@ -1,0 +1,195 @@
+'''
+read data from geotiff files.
+modified from SeCo, to be final checked.
+'''
+
+import json
+from pathlib import Path
+
+import numpy as np
+import rasterio
+from PIL import Image
+from torch.utils.data import Dataset
+from torchvision.datasets.utils import download_and_extract_archive, download_url
+import cv2
+import sys
+import pandas as pd
+
+ALL_BANDS = ['B01', 'B02', 'B03', 'B04', 'B05', 'B06', 'B07', 'B08', 'B8A', 'B09', 'B11', 'B12']
+RGB_BANDS = ['B04', 'B03', 'B02']
+
+BAND_STATS = {
+    'mean': {
+        'B01': 340.76769064,
+        'B02': 429.9430203,
+        'B03': 614.21682446,
+        'B04': 590.23569706,
+        'B05': 950.68368468,
+        'B06': 1792.46290469,
+        'B07': 2075.46795189,
+        'B08': 2218.94553375,
+        'B8A': 2266.46036911,
+        'B09': 2246.0605464,
+        'B11': 1594.42694882,
+        'B12': 1009.32729131
+    },
+    'std': {
+        'B01': 554.81258967,
+        'B02': 572.41639287,
+        'B03': 582.87945694,
+        'B04': 675.88746967,
+        'B05': 729.89827633,
+        'B06': 1096.01480586,
+        'B07': 1273.45393088,
+        'B08': 1365.45589904,
+        'B8A': 1356.13789355,
+        'B09': 1302.3292881,
+        'B11': 1079.19066363,
+        'B12': 818.86747235
+    }
+}
+
+LABELS = [
+    'Agro-forestry areas', 'Airports',
+    'Annual crops associated with permanent crops', 'Bare rock',
+    'Beaches, dunes, sands', 'Broad-leaved forest', 'Burnt areas',
+    'Coastal lagoons', 'Complex cultivation patterns', 'Coniferous forest',
+    'Construction sites', 'Continuous urban fabric',
+    'Discontinuous urban fabric', 'Dump sites', 'Estuaries',
+    'Fruit trees and berry plantations', 'Green urban areas',
+    'Industrial or commercial units', 'Inland marshes', 'Intertidal flats',
+    'Land principally occupied by agriculture, with significant areas of '
+    'natural vegetation', 'Mineral extraction sites', 'Mixed forest',
+    'Moors and heathland', 'Natural grassland', 'Non-irrigated arable land',
+    'Olive groves', 'Pastures', 'Peatbogs', 'Permanently irrigated land',
+    'Port areas', 'Rice fields', 'Road and rail networks and associated land',
+    'Salines', 'Salt marshes', 'Sclerophyllous vegetation', 'Sea and ocean',
+    'Sparsely vegetated areas', 'Sport and leisure facilities',
+    'Transitional woodland/shrub', 'Vineyards', 'Water bodies', 'Water courses'
+]
+
+NEW_LABELS = [
+    'Urban fabric',
+    'Industrial or commercial units',
+    'Arable land',
+    'Permanent crops',
+    'Pastures',
+    'Complex cultivation patterns',
+    'Land principally occupied by agriculture, with significant areas of natural vegetation',
+    'Agro-forestry areas',
+    'Broad-leaved forest',
+    'Coniferous forest',
+    'Mixed forest',
+    'Natural grassland and sparsely vegetated areas',
+    'Moors, heathland and sclerophyllous vegetation',
+    'Transitional woodland/shrub',
+    'Beaches, dunes, sands',
+    'Inland wetlands',
+    'Coastal wetlands',
+    'Inland waters',
+    'Marine waters'
+]
+
+GROUP_LABELS = {
+    'Continuous urban fabric': 'Urban fabric',
+    'Discontinuous urban fabric': 'Urban fabric',
+    'Non-irrigated arable land': 'Arable land',
+    'Permanently irrigated land': 'Arable land',
+    'Rice fields': 'Arable land',
+    'Vineyards': 'Permanent crops',
+    'Fruit trees and berry plantations': 'Permanent crops',
+    'Olive groves': 'Permanent crops',
+    'Annual crops associated with permanent crops': 'Permanent crops',
+    'Natural grassland': 'Natural grassland and sparsely vegetated areas',
+    'Sparsely vegetated areas': 'Natural grassland and sparsely vegetated areas',
+    'Moors and heathland': 'Moors, heathland and sclerophyllous vegetation',
+    'Sclerophyllous vegetation': 'Moors, heathland and sclerophyllous vegetation',
+    'Inland marshes': 'Inland wetlands',
+    'Peatbogs': 'Inland wetlands',
+    'Salt marshes': 'Coastal wetlands',
+    'Salines': 'Coastal wetlands',
+    'Water bodies': 'Inland waters',
+    'Water courses': 'Inland waters',
+    'Coastal lagoons': 'Marine waters',
+    'Estuaries': 'Marine waters',
+    'Sea and ocean': 'Marine waters'
+}
+
+
+def normalize(img, mean, std):
+    min_value = mean - 2 * std
+    max_value = mean + 2 * std
+    img = (img - min_value) / (max_value - min_value) * 255.0
+    img = np.clip(img, 0, 255).astype(np.uint8)
+    return img
+
+
+class Bigearthnet(Dataset):
+     
+    def __init__(self, root, split, bands=None, transform=None, target_transform=None, download=False, use_new_labels=True, normalize=False):
+            self.root = Path(root)
+            self.split = split
+            self.bands = bands if bands is not None else RGB_BANDS
+            self.transform = transform
+            self.target_transform = target_transform
+            self.use_new_labels = use_new_labels
+            self.normalize = normalize
+
+            self.samples = []
+            df = pd.read_parquet(self.root / "metadata.parquet")
+            for index, row in df.iterrows():
+                if row["split"] == split:
+                    print(row)
+                    sys.exit()
+                    tile_dir = "_".join(row["patch_id"].split("_")[:-2])
+                    self.samples.append(self.root / "BigEarthNet-S2" / tile_dir / row["patch_id"])
+
+    def __getitem__(self, index):
+            path = self.samples[index]
+            patch_id = path.name
+
+            channels = []
+            for b in self.bands:
+                ch = rasterio.open(path / f'{patch_id}_{b}.tif').read(1)
+                if self.normalize:
+                    ch = normalize(ch, mean=BAND_STATS['mean'][b], std=BAND_STATS['std'][b])
+                ch = cv2.resize(ch, dsize=(128, 128), interpolation=cv2.INTER_CUBIC)
+                channels.append(ch)
+            img = np.dstack(channels)
+
+            df = pd.read_parquet(self.root / "metadata.parquet")
+            df.loc[df["patch_id"] == patch_id]
+            first_row = df.iloc[0]
+            target = self.get_multihot_new(first_row["labels"])
+
+            if self.transform is not None:
+                img = self.transform(img)
+            if self.target_transform is not None:
+                target = self.target_transform(target)
+
+            return img, target
+
+    def __len__(self):
+        return len(self.samples)
+    
+    @staticmethod
+    def get_multihot_old(labels):
+        target = np.zeros((len(LABELS),), dtype=np.float32)
+        for label in labels:
+            target[LABELS.index(label)] = 1
+        return target
+
+    @staticmethod
+    def get_multihot_new(labels):
+        target = np.zeros((len(NEW_LABELS),), dtype=np.float32)
+        for label in labels:
+            if label in GROUP_LABELS:
+                target[NEW_LABELS.index(GROUP_LABELS[label])] = 1
+            elif label not in set(NEW_LABELS):
+                continue
+            else:
+                target[NEW_LABELS.index(label)] = 1
+        return target
+    
+if __name__ == "__main__":
+     print("loaded")
