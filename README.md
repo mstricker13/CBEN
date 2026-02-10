@@ -1,2 +1,16 @@
 # CBEN
-Code &amp; and Dataset for our publication CBEN -- A Multimodal Machine Learning Dataset for Cloud Robust Remote Sensing Image Understanding
+Code &amp; and Dataset for our publication CBEN -- A Multimodal Machine Learning Dataset for Cloud Robust Remote Sensing Image Understanding. Dataset is available here: TODO
+
+Code has been adapted from [Wang, Yi, et al. "SSL4EO-S12: A large-scale multimodal, multitemporal dataset for self-supervised learning in Earth observation [Software and Data Sets]." IEEE Geoscience and Remote Sensing Magazine 11.3 (2023): 98-106.](https://github.com/zhu-xlab/SSL4EO-S12?tab=readme-ov-file)
+
+## Dataset
+
+Code to run the dataset can be found at:
+
+## SSL
+
+Code to run the self supervised learning part is here:
+
+## Downstream
+
+Code to run the finetuning downstream part is here:
